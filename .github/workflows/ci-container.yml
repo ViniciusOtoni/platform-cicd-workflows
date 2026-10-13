@@ -31,6 +31,10 @@ on:
       trivy-version:
         type: string
         default: "0.58.0"
+      environment-name:
+        description: GitHub Environment do job quando push=true (subject OIDC environment:<env>)
+        type: string
+        default: dev
       azure-client-id:
         type: string
         default: ""
@@ -49,6 +53,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Sem push (PR) não há environment nem acesso ao Azure.
+    environment: ${{ inputs.push && inputs.environment-name || '' }}
     permissions:
       contents: read
       id-token: write
