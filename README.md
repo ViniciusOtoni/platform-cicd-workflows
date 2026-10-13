@@ -9,7 +9,7 @@ Os repositórios da plataforma e dos domínios **não escrevem pipelines**: eles
 | Workflow | Tipo | O que faz | Usado por |
 |---|---|---|---|
 | `ci-terraform.yml` | CI | `fmt`, `validate` e `plan` com OIDC, com o plan comentado no PR | `platform-infra` |
-| `cd-terraform.yml` | CD | `plan` + `apply` com OIDC, protegido por GitHub Environment | `platform-infra` |
+| `cd-terraform.yml` | CD | `plan` + `apply` com OIDC, protegido por GitHub Environment; `destroy: true` desliga ambientes efêmeros | `platform-infra` |
 | `ci-container.yml` | CI | `docker build`, scan Trivy e push opcional ao ACR (tag `X.Y.Z` ou `sha-xxxxxxx`) | `*-service` |
 | `cd-gitops-promote.yml` | CD | Atualiza a versão da imagem no `platform-gitops` (commit direto ou PR); o Flux reconcilia | `*-service` |
 | `ci-python.yml` | CI | `ruff`, `pytest` e build do wheel | SDK, frameworks |

@@ -1,4 +1,4 @@
-# CD de Terraform: plan + apply com OIDC, protegido por GitHub Environment.
+# CD de Terraform: plan + apply (ou plan -destroy + apply) com OIDC, protegido por GitHub Environment.
 # Requer no caller: permissions { contents: read, id-token: write }
 # Federated credential esperada: repo:<owner>/<repo>:environment:<environment-name>
 name: cd-terraform
@@ -15,6 +15,10 @@ on:
       terraform-version:
         type: string
         default: "1.15.7"
+      destroy:
+        description: Executa plan -destroy + apply (desligar ambientes efêmeros)
+        type: boolean
+        default: false
       azure-client-id:
         type: string
         required: true
@@ -31,7 +35,7 @@ on:
 
 jobs:
   apply:
-    name: apply (${{ inputs.working-directory }} / ${{ inputs.environment-name }})
+    name: ${{ inputs.destroy && 'destroy' || 'apply' }} (${{ inputs.working-directory }} / ${{ inputs.environment-name }})
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment-name }}
     concurrency:
@@ -72,7 +76,9 @@ jobs:
         id: plan
         run: |
           set +e
-          terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode \
+          destroy_flag=""
+          if [ "${{ inputs.destroy }}" = "true" ]; then destroy_flag="-destroy"; fi
+          terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode $destroy_flag \
             -var-file="envs/${{ inputs.environment-name }}.tfvars" -out=tfplan
           code=$?
           set -e
