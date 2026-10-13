@@ -1,0 +1,46 @@
+# CI de manifests GitOps: kustomize build de cada raiz + validação de schema com kubeconform
+# (inclui CRDs do Flux via datreeio/CRDs-catalog).
+name: ci-kustomize
+
+on:
+  workflow_call:
+    inputs:
+      roots:
+        description: Raízes Kustomize separadas por espaço (ex. "clusters/dev/infrastructure clusters/dev/domains")
+        type: string
+        required: true
+      kubernetes-version:
+        type: string
+        default: "1.33.0"
+      kubeconform-version:
+        type: string
+        default: "0.6.7"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${{ inputs.kubeconform-version }}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz -C /usr/local/bin kubeconform
+
+      - name: kustomize build + kubeconform
+        env:
+          ROOTS: ${{ inputs.roots }}
+        run: |
+          set -euo pipefail
+          for root in $ROOTS; do
+            echo "::group::$root"
+            kubectl kustomize "$root" > /tmp/rendered.yaml
+            kubeconform -strict -summary \
+              -kubernetes-version "${{ inputs.kubernetes-version }}" \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              /tmp/rendered.yaml
+            echo "::endgroup::"
+          done

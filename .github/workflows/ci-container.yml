@@ -1,0 +1,117 @@
+# CI de container: build, scan de vulnerabilidades (Trivy) e push opcional para o ACR.
+# Tag da imagem: X.Y.Z quando o ref é a tag vX.Y.Z; senão sha-<7 chars>.
+# Requer no caller (quando push=true): permissions { contents: read, id-token: write }
+name: ci-container
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: Nome do repositório da imagem no ACR (ex. pedidos/pedidos-api)
+        type: string
+        required: true
+      context:
+        type: string
+        default: "."
+      dockerfile:
+        type: string
+        default: Dockerfile
+      push:
+        description: Publica a imagem no ACR
+        type: boolean
+        default: false
+      acr-name:
+        description: Nome do ACR (sem .azurecr.io); obrigatório se push=true
+        type: string
+        default: ""
+      fail-on-severity:
+        description: Severidades que reprovam o scan
+        type: string
+        default: CRITICAL
+      trivy-version:
+        type: string
+        default: "0.58.0"
+      azure-client-id:
+        type: string
+        default: ""
+      azure-tenant-id:
+        type: string
+        default: ""
+      azure-subscription-id:
+        type: string
+        default: ""
+    outputs:
+      image-tag:
+        value: ${{ jobs.build.outputs.image-tag }}
+      image-ref:
+        value: ${{ jobs.build.outputs.image-ref }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+      image-ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calcular tag
+        id: meta
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          ACR: ${{ inputs.acr-name }}
+          IMAGE: ${{ inputs.image-name }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ] && [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            tag="${REF_NAME#v}"
+          else
+            tag="sha-${GITHUB_SHA::7}"
+          fi
+          registry="${ACR:+$ACR.azurecr.io/}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ref=${registry}${IMAGE}:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: docker build
+        env:
+          REF: ${{ steps.meta.outputs.ref }}
+        run: |
+          docker build -t "$REF" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -f "${{ inputs.context }}/${{ inputs.dockerfile }}" "${{ inputs.context }}"
+
+      - name: Trivy scan
+        env:
+          REF: ${{ steps.meta.outputs.ref }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            "aquasec/trivy:${{ inputs.trivy-version }}" image \
+            --exit-code 1 --ignore-unfixed --no-progress \
+            --severity "${{ inputs.fail-on-severity }}" "$REF"
+
+      - name: Validar inputs de push
+        if: inputs.push
+        run: |
+          if [ -z "${{ inputs.acr-name }}" ] || [ -z "${{ inputs.azure-client-id }}" ]; then
+            echo "::error::push=true exige acr-name e azure-client-id"; exit 1
+          fi
+
+      - uses: azure/login@v2
+        if: inputs.push
+        with:
+          client-id: ${{ inputs.azure-client-id }}
+          tenant-id: ${{ inputs.azure-tenant-id }}
+          subscription-id: ${{ inputs.azure-subscription-id }}
+
+      - name: Push para o ACR
+        if: inputs.push
+        env:
+          REF: ${{ steps.meta.outputs.ref }}
+        run: |
+          az acr login --name "${{ inputs.acr-name }}"
+          docker push "$REF"
+          echo "### Imagem publicada: \`$REF\`" >> "$GITHUB_STEP_SUMMARY"

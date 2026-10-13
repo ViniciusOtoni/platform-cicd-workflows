@@ -1,0 +1,33 @@
+# Exemplo: .github/workflows/bundle.yml em um <dominio>-data.
+name: bundle
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ci:
+    if: github.event_name == 'pull_request'
+    uses: ViniciusOtoni/platform-cicd-workflows/.github/workflows/ci-databricks-bundle.yml@v1
+    with:
+      target: dev
+      databricks-host: ${{ vars.DATABRICKS_HOST }}
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  cd:
+    if: github.event_name == 'push'
+    uses: ViniciusOtoni/platform-cicd-workflows/.github/workflows/cd-databricks-bundle.yml@v1
+    with:
+      target: dev
+      environment-name: dev
+      databricks-host: ${{ vars.DATABRICKS_HOST }}
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}

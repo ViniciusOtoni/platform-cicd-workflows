@@ -1,0 +1,51 @@
+# Exemplo: .github/workflows/service.yml em um <dominio>-service.
+# PR: build + scan. Merge na main: push sha-xxxx + promoção automática em dev.
+# Tag vX.Y.Z: push X.Y.Z + PR de promoção em prd (aprovação humana).
+name: service
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    uses: ViniciusOtoni/platform-cicd-workflows/.github/workflows/ci-container.yml@v1
+    with:
+      image-name: pedidos/pedidos-api
+      push: ${{ github.event_name == 'push' }}
+      acr-name: ${{ vars.ACR_NAME }}
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  promote-dev:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    uses: ViniciusOtoni/platform-cicd-workflows/.github/workflows/cd-gitops-promote.yml@v1
+    with:
+      file-path: domains/pedidos/overlays/dev/pedidos-api-values.yaml
+      yq-expression: .image.tag = strenv(TAG)
+      tag: ${{ needs.build.outputs.image-tag }}
+      environment-name: dev
+      mode: commit
+    secrets:
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+
+  promote-prd:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ViniciusOtoni/platform-cicd-workflows/.github/workflows/cd-gitops-promote.yml@v1
+    with:
+      file-path: domains/pedidos/overlays/prd/pedidos-api-values.yaml
+      yq-expression: .image.tag = strenv(TAG)
+      tag: ${{ needs.build.outputs.image-tag }}
+      environment-name: prd
+      mode: pull-request
+    secrets:
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}

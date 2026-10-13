@@ -1,0 +1,128 @@
+# CI de Terraform: fmt, validate e (opcional) plan com OIDC, comentado no PR.
+# Requer no caller: permissions { contents: read, id-token: write, pull-requests: write }
+name: ci-terraform
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Diretório do stack Terraform (ex. stacks/core)
+        type: string
+        required: true
+      environment-name:
+        description: Ambiente; usa envs/<env>.tfvars e envs/<env>.backend.hcl
+        type: string
+        default: dev
+      terraform-version:
+        type: string
+        default: "1.15.7"
+      run-plan:
+        description: Executa plan (requer IDs do Azure)
+        type: boolean
+        default: true
+      azure-client-id:
+        type: string
+        default: ""
+      azure-tenant-id:
+        type: string
+        default: ""
+      azure-subscription-id:
+        type: string
+        default: ""
+
+jobs:
+  validate:
+    name: validate (${{ inputs.working-directory }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init (sem backend)
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  plan:
+    name: plan (${{ inputs.working-directory }} / ${{ inputs.environment-name }})
+    needs: validate
+    if: inputs.run-plan && inputs.azure-client-id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      ARM_CLIENT_ID: ${{ inputs.azure-client-id }}
+      ARM_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      ARM_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      # Sessão az CLI: usada pelo provider databricks (auth azure-cli).
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure-client-id }}
+          tenant-id: ${{ inputs.azure-tenant-id }}
+          subscription-id: ${{ inputs.azure-subscription-id }}
+
+      - name: terraform init
+        run: terraform init -input=false -backend-config="envs/${{ inputs.environment-name }}.backend.hcl"
+
+      - name: terraform plan
+        run: |
+          terraform plan -input=false -no-color -lock-timeout=5m \
+            -var-file="envs/${{ inputs.environment-name }}.tfvars" -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Comentar plan no PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN_FILE: ${{ inputs.working-directory }}/plan.txt
+          STACK: ${{ inputs.working-directory }}
+          ENV_NAME: ${{ inputs.environment-name }}
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
+            const max = 60000;
+            if (plan.length > max) plan = plan.substring(0, max) + '\n... (truncado)';
+            const marker = `<!-- tf-plan:${process.env.STACK}:${process.env.ENV_NAME} -->`;
+            const body = `${marker}\n### Terraform plan: \`${process.env.STACK}\` (${process.env.ENV_NAME})\n<details><summary>Ver plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body,
+              });
+            }

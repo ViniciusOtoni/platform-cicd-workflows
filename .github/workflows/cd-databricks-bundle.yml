@@ -1,0 +1,67 @@
+# CD de Databricks Asset Bundle: bundle deploy no target, protegido por GitHub Environment.
+# Opcionalmente executa um job do bundle após o deploy (ex. smoke test).
+# Requer no caller: permissions { contents: read, id-token: write }
+name: cd-databricks-bundle
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      target:
+        type: string
+        required: true
+      environment-name:
+        type: string
+        required: true
+      databricks-host:
+        type: string
+        required: true
+      run-job:
+        description: Chave de um job do bundle para executar após o deploy (vazio = não executa)
+        type: string
+        default: ""
+      azure-client-id:
+        type: string
+        required: true
+      azure-tenant-id:
+        type: string
+        required: true
+      azure-subscription-id:
+        type: string
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment-name }}
+    concurrency:
+      group: dab-${{ github.repository }}-${{ inputs.target }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      DATABRICKS_HOST: ${{ inputs.databricks-host }}
+      DATABRICKS_AUTH_TYPE: azure-cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure-client-id }}
+          tenant-id: ${{ inputs.azure-tenant-id }}
+          subscription-id: ${{ inputs.azure-subscription-id }}
+
+      - name: bundle deploy
+        run: databricks bundle deploy -t "${{ inputs.target }}" --auto-approve
+
+      - name: bundle run
+        if: inputs.run-job != ''
+        run: databricks bundle run -t "${{ inputs.target }}" "${{ inputs.run-job }}"

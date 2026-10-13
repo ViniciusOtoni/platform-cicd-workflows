@@ -1,0 +1,84 @@
+# CD de Terraform: plan + apply com OIDC, protegido por GitHub Environment.
+# Requer no caller: permissions { contents: read, id-token: write }
+# Federated credential esperada: repo:<owner>/<repo>:environment:<environment-name>
+name: cd-terraform
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        required: true
+      environment-name:
+        type: string
+        required: true
+      terraform-version:
+        type: string
+        default: "1.15.7"
+      azure-client-id:
+        type: string
+        required: true
+      azure-tenant-id:
+        type: string
+        required: true
+      azure-subscription-id:
+        type: string
+        required: true
+    outputs:
+      changed:
+        description: "true se o plan tinha mudanças"
+        value: ${{ jobs.apply.outputs.changed }}
+
+jobs:
+  apply:
+    name: apply (${{ inputs.working-directory }} / ${{ inputs.environment-name }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment-name }}
+    concurrency:
+      group: tf-${{ github.repository }}-${{ inputs.working-directory }}-${{ inputs.environment-name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      ARM_CLIENT_ID: ${{ inputs.azure-client-id }}
+      ARM_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      ARM_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure-client-id }}
+          tenant-id: ${{ inputs.azure-tenant-id }}
+          subscription-id: ${{ inputs.azure-subscription-id }}
+
+      - name: terraform init
+        run: terraform init -input=false -backend-config="envs/${{ inputs.environment-name }}.backend.hcl"
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode \
+            -var-file="envs/${{ inputs.environment-name }}.tfvars" -out=tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          if [ "$code" -eq 2 ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: terraform apply
+        if: steps.plan.outputs.changed == 'true'
+        run: terraform apply -input=false -lock-timeout=5m tfplan

@@ -1,0 +1,91 @@
+# CD GitOps: atualiza a versão da imagem no repo platform-gitops.
+# O Flux no AKS reconcilia a mudança; este workflow nunca acessa o cluster.
+#   mode=commit        -> commit direto na branch padrão (uso: dev)
+#   mode=pull-request  -> abre PR (uso: prd; aprovação humana = promoção)
+# Requer secret GITOPS_TOKEN (fine-grained PAT/GitHub App com contents+pull-requests: write no repo gitops).
+name: cd-gitops-promote
+
+on:
+  workflow_call:
+    inputs:
+      gitops-repository:
+        type: string
+        default: ViniciusOtoni/platform-gitops
+      file-path:
+        description: Arquivo a alterar (ex. domains/pedidos/overlays/dev/helmrelease-patch.yaml)
+        type: string
+        required: true
+      yq-expression:
+        description: Expressão yq; recebe a tag na env TAG
+        type: string
+        default: .spec.values.image.tag = strenv(TAG)
+      tag:
+        type: string
+        required: true
+      environment-name:
+        type: string
+        required: true
+      mode:
+        type: string
+        default: commit
+    secrets:
+      GITOPS_TOKEN:
+        required: true
+
+jobs:
+  promote:
+    name: promote ${{ inputs.tag }} -> ${{ inputs.environment-name }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment-name }}
+    concurrency:
+      group: gitops-${{ inputs.gitops-repository }}-${{ inputs.file-path }}
+      cancel-in-progress: false
+    steps:
+      - name: Validar modo
+        if: inputs.mode != 'commit' && inputs.mode != 'pull-request'
+        run: |
+          echo "::error::mode deve ser 'commit' ou 'pull-request'"; exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops-repository }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Atualizar versão
+        working-directory: gitops
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPR: ${{ inputs.yq-expression }}
+          FILE: ${{ inputs.file-path }}
+        run: |
+          yq -i "$EXPR" "$FILE"
+          git --no-pager diff
+
+      - name: Commit / PR
+        working-directory: gitops
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          ENV_NAME: ${{ inputs.environment-name }}
+          FILE: ${{ inputs.file-path }}
+          SOURCE_REPO: ${{ github.repository }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if git diff --quiet; then
+            echo "Nenhuma mudança: versão já aplicada."; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          msg="chore(${ENV_NAME}): promove ${SOURCE_REPO} para ${TAG}"
+          if [ "$MODE" = "commit" ]; then
+            git commit -am "$msg"
+            git push
+          else
+            branch="promote/${ENV_NAME}/$(basename "$SOURCE_REPO")-${TAG}"
+            git checkout -b "$branch"
+            git commit -am "$msg"
+            git push -u origin "$branch"
+            gh pr create --title "$msg" \
+              --body "Promoção automática de \`${SOURCE_REPO}\` para \`${TAG}\` em \`${ENV_NAME}\` (arquivo \`${FILE}\`). O merge dispara a reconciliação do Flux."
+          fi
