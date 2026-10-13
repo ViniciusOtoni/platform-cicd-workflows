@@ -19,6 +19,7 @@ jobs:
     with:
       image-name: pedidos/pedidos-api
       push: ${{ github.event_name == 'push' }}
+      environment-name: ${{ startsWith(github.ref, 'refs/tags/v') && 'prd' || 'dev' }}
       acr-name: ${{ vars.ACR_NAME }}
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
