@@ -18,12 +18,13 @@ Os repositórios da plataforma e dos domínios **não escrevem pipelines**: eles
 | `ci-databricks-bundle.yml` | CI | `databricks bundle validate` com OIDC | `*-data` |
 | `cd-databricks-bundle.yml` | CD | `databricks bundle deploy` (+ `run` opcional), protegido por Environment | `*-data` |
 | `ci-kustomize.yml` | CI | `kustomize build` + `kubeconform` (com CRDs do Flux) | `platform-gitops` |
+| `ci-contracts.yml` | CI | `edp-contracts`: lint ODCS v3.2.0 + regras da plataforma, schemas gerados em dia e, em PR, bloqueio de breaking changes vs branch base | `*-service` |
 
 ## Fluxo CI → CD por tipo de componente
 
 ```
 platform-infra      PR ─▶ ci-terraform (plan no PR)        merge ─▶ cd-terraform (apply, env dev)
-<dominio>-service   PR ─▶ ci-container (build+scan)        merge ─▶ ci-container (push) ─▶ cd-gitops-promote (dev)
+<dominio>-service   PR ─▶ ci-contracts + ci-container (build+scan)        merge ─▶ ci-container (push) ─▶ cd-gitops-promote (dev)
                                                              tag  ─▶ cd-gitops-promote (prd, mode=pull-request)
 <dominio>-data      PR ─▶ ci-databricks-bundle (validate)  merge ─▶ cd-databricks-bundle (deploy dev)
 frameworks / SDK    PR ─▶ ci-python                        tag  ─▶ cd-python-release + cd-major-tag
