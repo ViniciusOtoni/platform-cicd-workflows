@@ -37,7 +37,7 @@ platform-gitops     PR ─▶ ci-kustomize                     merge ─▶ (Flu
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | **Variables** (não secrets) | Login OIDC; são IDs, não credenciais |
 | Federated credential na App Registration | Entra ID (criada pelo `platform-infra/bootstrap`) | Subjects `repo:<owner>/<repo>:pull_request` e `repo:<owner>/<repo>:environment:<env>` |
 | GitHub Environment `dev` (e `prd`) | Settings → Environments | Gate de aprovação do CD + subject do OIDC |
-| `GITOPS_TOKEN` | **Secret** (só nos `*-service`) | Fine-grained PAT com `contents` e `pull-requests: write` no `platform-gitops` |
+| `GITOPS_DEPLOY_KEY` ou `GITOPS_TOKEN` | **Secret** (só nos `*-service`) | Deploy key SSH com escrita só no `platform-gitops` (basta para `mode=commit`) ou PAT/GitHub App (necessário para `mode=pull-request`) |
 | `permissions: id-token: write` | No workflow chamador | Obrigatório para OIDC |
 
 > As variáveis do Azure são passadas como **inputs**, e não lidas via `vars` dentro do workflow reutilizável. Isso deixa explícito o que cada pipeline usa e permite que o CI rode só a validação (sem plan) enquanto o Azure não estiver configurado.
