@@ -2,7 +2,9 @@
 # O Flux no AKS reconcilia a mudança; este workflow nunca acessa o cluster.
 #   mode=commit        -> commit direto na branch padrão (uso: dev)
 #   mode=pull-request  -> abre PR (uso: prd; aprovação humana = promoção)
-# Requer secret GITOPS_TOKEN (fine-grained PAT/GitHub App com contents+pull-requests: write no repo gitops).
+# Credencial (uma das duas):
+#   GITOPS_DEPLOY_KEY: chave SSH privada de uma deploy key com escrita SÓ no repo gitops (suficiente p/ mode=commit).
+#   GITOPS_TOKEN:      fine-grained PAT/GitHub App com contents+pull-requests: write (obrigatório p/ mode=pull-request).
 name: cd-gitops-promote
 
 on:
@@ -12,7 +14,7 @@ on:
         type: string
         default: ViniciusOtoni/platform-gitops
       file-path:
-        description: Arquivo a alterar (ex. domains/pedidos/overlays/dev/helmrelease-patch.yaml)
+        description: Arquivo a alterar (ex. domains/pedidos/overlays/dev/kustomization.yaml)
         type: string
         required: true
       yq-expression:
@@ -30,7 +32,9 @@ on:
         default: commit
     secrets:
       GITOPS_TOKEN:
-        required: true
+        required: false
+      GITOPS_DEPLOY_KEY:
+        required: false
 
 jobs:
   promote:
@@ -41,15 +45,27 @@ jobs:
       group: gitops-${{ inputs.gitops-repository }}-${{ inputs.file-path }}
       cancel-in-progress: false
     steps:
-      - name: Validar modo
-        if: inputs.mode != 'commit' && inputs.mode != 'pull-request'
+      - name: Validar modo e credenciais
+        env:
+          MODE: ${{ inputs.mode }}
+          HAS_TOKEN: ${{ secrets.GITOPS_TOKEN != '' }}
+          HAS_KEY: ${{ secrets.GITOPS_DEPLOY_KEY != '' }}
         run: |
-          echo "::error::mode deve ser 'commit' ou 'pull-request'"; exit 1
+          if [ "$MODE" != "commit" ] && [ "$MODE" != "pull-request" ]; then
+            echo "::error::mode deve ser 'commit' ou 'pull-request'"; exit 1
+          fi
+          if [ "$MODE" = "pull-request" ] && [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::mode=pull-request exige GITOPS_TOKEN"; exit 1
+          fi
+          if [ "$HAS_TOKEN" != "true" ] && [ "$HAS_KEY" != "true" ]; then
+            echo "::error::informe GITOPS_DEPLOY_KEY ou GITOPS_TOKEN"; exit 1
+          fi
 
       - uses: actions/checkout@v4
         with:
           repository: ${{ inputs.gitops-repository }}
-          token: ${{ secrets.GITOPS_TOKEN }}
+          token: ${{ secrets.GITOPS_TOKEN || github.token }}
+          ssh-key: ${{ secrets.GITOPS_DEPLOY_KEY }}
           path: gitops
 
       - name: Atualizar versão
@@ -80,7 +96,13 @@ jobs:
           msg="chore(${ENV_NAME}): promove ${SOURCE_REPO} para ${TAG}"
           if [ "$MODE" = "commit" ]; then
             git commit -am "$msg"
-            git push
+            # Outros serviços podem promover ao mesmo tempo: rebase e tenta de novo.
+            for i in 1 2 3 4 5; do
+              git push && exit 0
+              echo "push rejeitado (tentativa $i); rebase e nova tentativa"
+              git pull --rebase
+            done
+            exit 1
           else
             branch="promote/${ENV_NAME}/$(basename "$SOURCE_REPO")-${TAG}"
             git checkout -b "$branch"
