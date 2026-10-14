@@ -43,28 +43,27 @@ jobs:
 
       - name: Lint (ODCS v3.2.0 + regras da plataforma)
         run: |
-          shopt -s nullglob
-          files=($CONTRACTS)
+          mapfile -t files < <(compgen -G "$CONTRACTS" || true)
           if [ ${#files[@]} -eq 0 ]; then echo "::error::nenhum contrato em $CONTRACTS"; exit 1; fi
           edp-contracts lint "${files[@]}"
 
       - name: Schemas gerados em dia
         run: |
-          shopt -s nullglob
-          for f in $CONTRACTS; do edp-contracts check "$f" --schemas "$SCHEMAS"; done
+          mapfile -t files < <(compgen -G "$CONTRACTS" || true)
+          for f in "${files[@]}"; do edp-contracts check "$f" --schemas "$SCHEMAS"; done
 
       - name: Breaking changes vs branch base
         if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          shopt -s nullglob
+          mapfile -t files < <(compgen -G "$CONTRACTS" || true)
           status=0
           {
             echo "## Contratos: compatibilidade vs \`$BASE\`"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          for f in $CONTRACTS; do
+          for f in "${files[@]}"; do
             if git cat-file -e "origin/$BASE:$f" 2>/dev/null; then
               git show "origin/$BASE:$f" > "$RUNNER_TEMP/old.yaml"
               echo "== $f"
