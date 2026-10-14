@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # shell: bash explícito => `bash -eo pipefail`. Sem pipefail, `edp-contracts ... | tee` mascarava a falha.
+    defaults:
+      run:
+        shell: bash
     env:
       CONTRACTS: ${{ inputs.contracts }}
       SCHEMAS: ${{ inputs.schemas-dir }}
