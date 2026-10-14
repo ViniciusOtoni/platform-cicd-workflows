@@ -1,0 +1,77 @@
+# CI de contratos (ADR-0005): lint ODCS v3.2.0 + regras da plataforma, schemas gerados em dia
+# e, em PR, bloqueio de breaking changes comparando com a branch base.
+name: ci-contracts
+
+on:
+  workflow_call:
+    inputs:
+      contracts:
+        description: Glob dos contratos ODCS
+        type: string
+        default: contracts/*.odcs.yaml
+      schemas-dir:
+        description: Diretório dos JSON Schemas gerados
+        type: string
+        default: contracts/schemas
+      tooling-version:
+        description: Versão do edp-contracts (platform-contracts-tooling)
+        type: string
+        default: "0.1.0"
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONTRACTS: ${{ inputs.contracts }}
+      SCHEMAS: ${{ inputs.schemas-dir }}
+      TOOLING: ${{ inputs.tooling-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar edp-contracts
+        run: |
+          pip install "edp-contracts @ https://github.com/ViniciusOtoni/platform-contracts-tooling/releases/download/v${TOOLING}/edp_contracts-${TOOLING}-py3-none-any.whl"
+          edp-contracts --version
+
+      - name: Lint (ODCS v3.2.0 + regras da plataforma)
+        run: |
+          shopt -s nullglob
+          files=($CONTRACTS)
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::nenhum contrato em $CONTRACTS"; exit 1; fi
+          edp-contracts lint "${files[@]}"
+
+      - name: Schemas gerados em dia
+        run: |
+          shopt -s nullglob
+          for f in $CONTRACTS; do edp-contracts check "$f" --schemas "$SCHEMAS"; done
+
+      - name: Breaking changes vs branch base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          shopt -s nullglob
+          status=0
+          {
+            echo "## Contratos: compatibilidade vs \`$BASE\`"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in $CONTRACTS; do
+            if git cat-file -e "origin/$BASE:$f" 2>/dev/null; then
+              git show "origin/$BASE:$f" > "$RUNNER_TEMP/old.yaml"
+              echo "== $f"
+              edp-contracts breaking "$RUNNER_TEMP/old.yaml" "$f" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+            else
+              echo "== $f: contrato novo (sem versão anterior)" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
